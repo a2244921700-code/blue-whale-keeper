@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">蓝色大肥鱼管家</string>
+    <string name="accessibility_service_description">读取支付结果页上的收款方与金额，用于自动记账。不会模拟点击、不读取密码、不启动支付流程。</string>
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只监听这几个支付 App 的事件。
+  packageNames 限制能大幅降低事件量 —— 不限制的话系统每次界面变化都会喊我们，
+  手机立刻变卡、电也哗哗掉。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="com.eg.android.AlipayGphone,com.tencent.mm,com.taobao.taobao,com.taobao.idlefish,com.jingdong.app.mall,com.jd.jrapp,com.xunmeng.pinduoduo,com.unionpay,com.unionpay.mobilepay,com.android.incallui,com.android.dialer,com.android.server.telecom,com.google.android.dialer,com.hihonor.incallui,com.hihonor.phone,com.hihonor.contacts,com.huawei.incallui,com.huawei.phone,com.huawei.contacts,com.android.contacts,com.miui.incallui,com.android.phone" />
