@@ -7,7 +7,7 @@
   <img src="docs/screenshots/01-home.jpg" width="24%" alt="首页" />
   <img src="docs/screenshots/02-fortune.jpg" width="24%" alt="当前全部身家" />
   <img src="docs/screenshots/04-callguard.jpg" width="24%" alt="通话防护" />
-  <img src="docs/screenshots/05-splash.jpg" width="24%" alt="开屏" />
+  <img src="docs/screenshots/07-blocked-notification.jpg" width="24%" alt="拦截实机效果" />
 </p>
 
 ---
@@ -22,7 +22,7 @@
 - ✅ **完全离线** —— 没有一行联网代码，账单只存在你自己的 SQLite 里
 - ✅ **数据可查** —— 采集到的原始证据、解析过程、为什么没记上，全都摊开给你看
 
-除此之外还兼职做了个**骚扰电话拦截** —— 座机静默挂断，来电名含「传媒」「国学」这类词的也挂。
+除此之外还兼职做了个**骚扰电话拦截** —— 座机静默挂断，来电名含「传媒」「国学」这类词的也挂。**已在荣耀 80 上实机验证可用**。
 
 ---
 
@@ -90,6 +90,15 @@
 - 座机规则利用一个事实：**国内手机号都是 11 位、1 开头**
 - 通讯录里的号码**永远放行**
 - 拦截后留**静默通知**，带「这是正常电话」按钮，点一下加白名单
+
+<p align="center">
+  <img src="docs/screenshots/07-blocked-notification.jpg" width="46%" alt="拦截通知实机截图" />
+</p>
+
+> **实机验证**（荣耀 80 / Android 12）：400 开头的服务号被静默拦下，
+> 用户全程没被打扰，只在通知栏留下一条记录。
+> 这也证明了**国产 ROM 是允许第三方承担来电筛选角色的** ——
+> 前提是去「设置 → 应用 → 默认应用 → 来电显示和拦截」里手动授权。
 
 ---
 
