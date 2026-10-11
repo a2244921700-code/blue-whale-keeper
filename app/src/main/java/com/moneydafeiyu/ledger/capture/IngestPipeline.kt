@@ -82,13 +82,24 @@ object IngestPipeline {
         occurredAt: Long,
         channel: String = Channel.NOTIFICATION,
         silent: Boolean = false,
+        packageName: String = "",
     ): Outcome {
         if (!PaymentTextParser.supports(sourceKey)) return Outcome.Unsupported
 
         val parsed = when (channel) {
             Channel.ACCESSIBILITY, Channel.OCR -> PageTextParser.parse(rawText)
             else -> PaymentTextParser.parse(sourceKey, rawText)
-        } ?: return Outcome.Unparsable
+        } ?: run {
+            // 把失败原因写进事件流水。这一条是给用户排障用的：
+            // 「收到了但没记上」和「压根没收到」看着一样，处理方式却完全不同。
+            val why = if (channel == Channel.NOTIFICATION) {
+                PaymentTextParser.diagnose(sourceKey, rawText)
+            } else {
+                "页面文本里没找到可用的金额/方向"
+            }
+            CaptureEventLog.record(packageName, false, "解析失败：$why", rawText)
+            return Outcome.Unparsable
+        }
 
         // 收入只信这三家。
         // 拼多多、淘宝之类的 App 会弹「恭喜获得 XX 元」这种虚假收款广告，
@@ -101,6 +112,12 @@ object IngestPipeline {
 
         val db = MoneyDatabase.get(context)
         val txDao = db.transactionDao()
+
+        // 这两个标记要在**融合**逻辑之前算出来 —— 融合分支也要用。
+        val isBankDebit = sourceKey == SourceKey.BANK && parsed.direction == Direction.EXPENSE
+        // 待接收的转账：钱还没到手，记成待确认。
+        // 微信转账 24 小时不领会退回，直接记成收入的话对方撤回就对不上账了。
+        val isProvisional = parsed.provisional
 
         // 先算分类：融合时也要用它。
         //
@@ -150,7 +167,14 @@ object IngestPipeline {
                         // 来源换成信息更权威的那个（页面 > 支付宝 > 银行）
                         sourceKey = if (existing.sourceKey == SourceKey.BANK) sourceKey else existing.sourceKey,
                         confidence = maxOf(existing.confidence, parsed.confidence),
-                        status = if (parsed.merchant.isNotBlank()) TxStatus.PENDING else existing.status,
+                        // 能走到这里，前提就是「新证据有商户名、旧记录没有」——
+                        // 也就是分类不确定的问题刚刚被解决了，状态该转正。
+                        // （原来这里写的是 PENDING，导致补全信息的记录还挂着"待确认"。）
+                        status = if (existing.status == TxStatus.PENDING && !isProvisional) {
+                            TxStatus.CONFIRMED
+                        } else {
+                            existing.status
+                        },
                     )
                 )
                 if (evidenceId > 0) {
@@ -166,18 +190,26 @@ object IngestPipeline {
             return Outcome.Duplicate(existing.id)
         }
 
-        val isBankDebit = sourceKey == SourceKey.BANK && parsed.direction == Direction.EXPENSE
-
         val id = txDao.insert(
             TransactionEntity(
                 amountCents = parsed.amountCents,
                 direction = parsed.direction,
                 merchant = parsed.merchant,
                 categoryId = category?.id,
-                note = if (isBankDebit) "银行扣款。若与微信/支付宝的记录重复，请长按删除。" else "",
+                note = when {
+                    isBankDebit -> "银行扣款。若与微信/支付宝的记录重复，请长按删除。"
+                    // 待接收转账：钱还在对方那里，微信 24 小时不领会退回。
+                    // 挂待确认，等真正收款再落实。
+                    isProvisional -> "转账待接收。钱还没到账，收到后再确认。"
+                    else -> ""
+                },
                 occurredAt = occurredAt,
-                // 缺商户名 → 分类无法确认 → 待确认；银行支出同理
-                status = if (parsed.merchant.isBlank() || isBankDebit) TxStatus.PENDING else TxStatus.CONFIRMED,
+                // 缺商户名 → 分类无法确认 → 待确认；银行支出、待接收转账同理
+                status = if (parsed.merchant.isBlank() || isBankDebit || isProvisional) {
+                    TxStatus.PENDING
+                } else {
+                    TxStatus.CONFIRMED
+                },
                 confidence = parsed.confidence,
                 sourceKey = sourceKey,
             )

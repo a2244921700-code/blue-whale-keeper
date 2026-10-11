@@ -120,7 +120,17 @@ class PaymentNotificationListener : NotificationListenerService() {
             CaptureEventLog.record(pkg, true, "宽集模式", joined)
         } else {
             if (knownSource == null) {
-                CaptureEventLog.record(pkg, false, "不在白名单 App 里", joined)
+                // 白名单外**不再无条件记日志** ——
+                // 复制文案时弹的输入法选择器、系统 UI 的提示都会走到这里，
+                // 全记下来会把调试台淹掉，真正有用的信息反而看不见。
+                //
+                // 只在它**看起来像一笔真实支付**时才留一条，
+                // 因为那意味着"有个 App 的支付通知我没接入"，是有价值的线索。
+                val looksLikeRealPayment = looksPaymentRelated(joined) &&
+                    (joined.contains(Regex("[¥￥]\\s*[0-9]")) || joined.contains(Regex("[0-9]+\\.[0-9]{2}\\s*元")))
+                if (looksLikeRealPayment) {
+                    CaptureEventLog.record(pkg, false, "疑似支付通知，但来源未接入", joined)
+                }
                 return
             }
             if (!looksPaymentRelated(joined)) {

@@ -13,4 +13,11 @@ data class ParsedResult(
     /** 命中的规则名，调试台用它回答"这笔是怎么认出来的" */
     val rule: String,
     val confidence: Double,
+    /**
+     * 这笔钱是「暂定」的 —— 收到了消息，但钱还没真正到账。
+     *
+     * 目前只有一种情况：微信转账的**待接收**通知。
+     * 这种会被记成待确认状态，等你收款后再落实，避免对方撤回后账目对不上。
+     */
+    val provisional: Boolean = false,
 )
