@@ -180,8 +180,8 @@
 
 ```bash
 # 需要 JDK 17 和 Android SDK (platform 34, build-tools 34.0.0)
-git clone https://github.com/a2244921700-code/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/a2244921700-code/blue-whale-keeper.git
+cd blue-whale-keeper
 ./gradlew assembleDebug
 ```
 
