@@ -51,6 +51,13 @@ class PaymentAccessibilityService : AccessibilityService() {
          */
         private const val OCR_CAPTURE_DELAY_MS = 400L
 
+        /**
+         * OCR 频率上限：一秒最多三次。
+         *
+         * 不受限时，微信里每滚一下、每切一页都会触发截图 + 识别，手机发烫明显。
+         * 而 5 秒节流又会漏掉真实支付（支付页停留很短）。333ms 取中间值。
+         */
+        private const val OCR_MIN_INTERVAL_MS = 333L
 
         // ---- 当前页面的结构指纹缓存 ----
         //
@@ -70,7 +77,6 @@ class PaymentAccessibilityService : AccessibilityService() {
         /** 供外部（通知点击）读取当前缓存的页面信息 */
         fun currentPage(): Triple<String, String, String> =
             Triple(cachedPkg, cachedActivity, cachedFingerprint)
-
 
         /** 类名没匹配上时的探测节流 —— 防止每次窗口切换都读树 */
         private const val UNMATCHED_PROBE_THROTTLE_MS = 800L
@@ -103,15 +109,24 @@ class PaymentAccessibilityService : AccessibilityService() {
             "金额", "¥", "￥",
         )
 
-
         // ---- 支付页状态机（重写后新增）----
 
         /** 当前正处在哪个包的支付结果页（null = 不在） */
         @Volatile
         private var payPagePkg: String? = null
 
-        /** 支付页状态有效期（离开这个时间窗就失效） */
-        private const val PAY_PAGE_WINDOW_MS = 60_000L
+        /**
+         * 每个页面只监测这么久，然后停下。
+         *
+         * 语义是「**页面切换后开一个 3 秒窗口**」：窗口内页面的内容变化（异步渲染、
+         * 列表刷新）会被继续读取；窗口一过就彻底安静 —— 即使这个页面还在屏幕上。
+         * 下次窗口切换再开一个新的 3 秒。
+         *
+         * 原来是 60 秒，等于「只要停在微信里就一直在读屏」，实测手机发烫。
+         * 而支付结果页从出现到稳定渲染完通常在 1 秒内（探测点 120/380/900ms
+         * 全都落在窗口内），3 秒对识别本身是够的。
+         */
+        private const val PAY_PAGE_WINDOW_MS = 3_000L
 
         @Volatile
         private var payPageUntil: Long = 0L
@@ -124,7 +139,6 @@ class PaymentAccessibilityService : AccessibilityService() {
          */
         @Volatile
         private var sourceTextCache: String = ""
-
 
         /**
          * 微信内的「支付功能入口」词。
@@ -168,17 +182,14 @@ class PaymentAccessibilityService : AccessibilityService() {
         var lastOcrAt: Long = 0L
             private set
 
-
         /** 读屏未命中的日志节流 —— 页面滚动会疯狂触发事件，不节流会刷爆日志 */
         private const val MISS_LOG_THROTTLE_MS = 5_000L
         @Volatile
         private var lastMissLogAt: Long = 0L
 
         private val PROBE_DELAYS = longArrayOf(120L, 380L, 900L)
-        private val OCR_DELAYS = longArrayOf(1200L, 3200L)
 
         /** OCR 节流：12 秒内最多识别一次 */
-        private const val OCR_THROTTLE_MS = 5_000L
 
         /** 转账待接收页 —— 钱还没到，但值得记一笔待确认 */
         private val TRANSFER_PAGE_MARKERS = listOf(
@@ -259,7 +270,6 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     private var textRecognizer: TextRecognizer? = null
     private var ocrInFlight = false
-    private var ocrSucceeded = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -508,91 +518,10 @@ class PaymentAccessibilityService : AccessibilityService() {
             CaptureEventLog.record(pkg, false, "读屏未命中：$why｜" + (if (inPayFlow) "支付流程中" else "流程外"), text)
         }
 
-        // 主路没读到内容 —— 可能是自绘页面，考虑动用 OCR 兜底
-        maybeOcr(sourceKey, pkg, className, text)
-    }
-
-    /** 微信之类的自绘页面拿不到节点时，截屏做离线识别 */
-    private fun maybeOcr(sourceKey: String, pkg: String, className: String, visible: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        // OCR 只给微信留着：其他 App 的通知通道已经够用，没必要付出截图的代价
-        if (sourceKey != SourceKey.WECHAT) return
-        if (!looksLikeWechatPayPage(className, visible)) return
-
-        val now = System.currentTimeMillis()
-        if (now - lastOcrAt < OCR_THROTTLE_MS) return
-        lastOcrAt = now
-        ocrSucceeded = false
-
-        for (delay in OCR_DELAYS) {
-            main.postDelayed({ if (!ocrSucceeded) takeScreenshotAndRecognize(pkg) }, delay)
-        }
-    }
-
-    private fun looksLikeWechatPayPage(className: String, visible: String): Boolean {
-        val compact = visible.replace(Regex("\\s+"), "")
-        if (BROWSING_MARKERS.any { compact.contains(it) }) return false
-        if (compact.contains("微信支付")) return true
-        val lower = className.lowercase()
-        val payClass = WECHAT_PAY_CLASS_MARKERS.any { lower.contains(it) }
-        // 类名像支付页，且页面上有支付相关字样
-        return payClass && (compact.isEmpty() || WECHAT_PAY_HINTS.any { compact.contains(it) })
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun takeScreenshotAndRecognize(pkg: String) {
-        if (ocrInFlight) return
-        ocrInFlight = true
-        runCatching {
-            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-                override fun onSuccess(result: ScreenshotResult) {
-                    handleScreenshot(result, pkg)
-                }
-
-                override fun onFailure(errorCode: Int) {
-                    ocrInFlight = false
-                    Log.w(TAG, "截屏失败 code=$errorCode")
-                }
-            })
-        }.onFailure {
-            ocrInFlight = false
-            Log.e(TAG, "截屏异常", it)
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun handleScreenshot(result: AccessibilityService.ScreenshotResult, pkg: String) {
-        val bitmap: Bitmap? = runCatching {
-            val hw = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
-            result.hardwareBuffer.close()
-            hw?.copy(Bitmap.Config.ARGB_8888, false)
-        }.getOrNull()
-
-        if (bitmap == null) {
-            ocrInFlight = false
-            return
-        }
-
-        val recognizer = textRecognizer ?: TextRecognition.getClient(
-            ChineseTextRecognizerOptions.Builder().build()
-        ).also { textRecognizer = it }
-
-        recognizer.process(InputImage.fromBitmap(bitmap, 0))
-            .addOnSuccessListener { visionText ->
-                val raw = visionText.text.trim()
-                runCatching { bitmap.recycle() }
-                ocrInFlight = false
-                if (raw.length >= 6 && looksLikePaymentResult(raw)) {
-                    ocrSucceeded = true
-                    Log.i(TAG, "OCR 命中支付结果页，识别到 ${raw.length} 字")
-                    submit(SourceKey.WECHAT, pkg, raw, Channel.OCR)
-                }
-            }
-            .addOnFailureListener {
-                runCatching { bitmap.recycle() }
-                ocrInFlight = false
-                Log.e(TAG, "OCR 识别失败", it)
-            }
+        // 主路没读到内容 —— 可能是自绘页面，考虑动用 OCR 兜底。
+        // 走统一入口 triggerOcr：以前这里另有一条 maybeOcr，两条路各自判节流、
+        // 互相不知道对方，等于双倍截图 —— 手机发烫的主因之一。
+        triggerOcr(sourceKey, pkg)
     }
 
     private fun submit(sourceKey: String, pkg: String, text: String, channel: String) {
@@ -698,20 +627,28 @@ class PaymentAccessibilityService : AccessibilityService() {
             CaptureEventLog.record(pkg, false, "系统版本低于 Android 11，不支持截图 OCR", "")
             return
         }
-        // 节流暂时关掉。
+        // 频率上限：**一秒最多三次**（333ms 一次）。
         //
-        // 原来的 5 秒节流是为了省电，但实测下来它挡掉了太多真实机会 ——
-        // 支付页出现的时间窗很短，一旦被挡就只能等下一次页面变化，
-        // 而那时用户早就点「完成」离开了。
+        // 之前走了两个极端：先是 5 秒节流 —— 会漏掉真实支付，
+        // 因为支付页停留时间很短，被挡一次就只能等下次页面变化，
+        // 那时用户已经点「完成」走了；后来干脆完全放开 ——
+        // 结果微信里每滚一下、每切一页都在截图做 OCR，手机明显发烫。
         //
-        // 现在只保留"防并发"这一条：OCR 本身要几百毫秒，
-        // 允许并发会同时跑好几个截图，反而全失败。
-        // 重复识别不会造成重复记账 —— 入库那一步有去重。
+        // 一秒三次是折中：实测单次 OCR 本身要 300~800ms，
+        // 所以这个上限很少真正卡住识别，但能挡住"页面频繁抖动"
+        // 引发的那种连续截图。
+        //
+        // 另外重复识别不会导致重复记账 —— 入库那一步有去重。
+        val now = System.currentTimeMillis()
+        if (now - lastOcrAt < OCR_MIN_INTERVAL_MS) {
+            CaptureEventLog.record(pkg, false, "OCR 触发过密，跳过（距上次 " + (now - lastOcrAt) + "ms）", "")
+            return
+        }
         if (ocrInFlight) {
             CaptureEventLog.record(pkg, false, "上一轮 OCR 还没结束，跳过", "")
             return
         }
-        lastOcrAt = System.currentTimeMillis()
+        lastOcrAt = now
 
         // 延迟一下再截 —— 页面刚切换的瞬间往往还在动画/渲染中，
         // 立刻截很容易截到上一页（实测截到过聊天列表）。
