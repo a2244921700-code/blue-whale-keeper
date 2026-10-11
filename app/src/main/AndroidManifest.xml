@@ -68,6 +68,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+        <!-- 处理「记住这个页面」通知的点击 -->
+        <receiver
+            android:name=".capture.PageTeachReceiver"
+            android:exported="false" />
+
         <!-- 处理拦截通知上的「这是正常电话」按钮 -->
         <receiver
             android:name=".callguard.WhitelistActionReceiver"

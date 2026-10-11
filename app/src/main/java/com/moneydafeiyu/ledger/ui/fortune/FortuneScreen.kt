@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -68,6 +69,7 @@ fun FortuneScreen(onBack: () -> Unit, vm: FortuneViewModel = viewModel()) {
     var pendingDiff by remember { mutableStateOf(0L) }
     var showExplain by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showComingSoon by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -104,13 +106,30 @@ fun FortuneScreen(onBack: () -> Unit, vm: FortuneViewModel = viewModel()) {
             return@Scaffold
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { BalanceCard(f) }
-            item { BalanceChartCard(vm) }
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                // 底部留出空间，免得最后一张卡片被左下角的按钮压住
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 64.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item { BalanceCard(f) }
+                item { BalanceChartCard(vm) }
+            }
+
+            // ---- 左下角：换机迁移入口 ----
+            //
+            // 放在这里而不是调试台，是因为它是**给普通用户用的**功能：
+            // 换手机时要能想到"去身家页找找"，而不是"去调试台找找"。
+            Row(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SmallPillButton("导出数据") { showComingSoon = "数据导出" }
+                SmallPillButton("导入数据") { showComingSoon = "数据导入" }
+            }
         }
     }
 
@@ -235,6 +254,20 @@ fun FortuneScreen(onBack: () -> Unit, vm: FortuneViewModel = viewModel()) {
             confirmButton = { TextButton(onClick = { showHistory = false }) { Text("关闭") } },
         )
     }
+
+    // 导出/导入还没做，但入口先摆出来 —— 让用户知道这软件支持换机迁移
+    showComingSoon?.let { name ->
+        AlertDialog(
+            onDismissRequest = { showComingSoon = null },
+            title = { Text(name) },
+            text = {
+                Text("功能开发中，敬请期待。\n\n做好之后，换手机时就能把账本原样搬过去了。")
+            },
+            confirmButton = {
+                TextButton(onClick = { showComingSoon = null }) { Text("知道了") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -344,5 +377,25 @@ private fun BalanceChartCard(vm: FortuneViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+}
+
+
+/** 身家页左下角那种小胶囊按钮：低调、不抢视线，但看得清 */
+@Composable
+private fun SmallPillButton(text: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+        tonalElevation = 2.dp,
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

@@ -95,7 +95,7 @@ object IngestPipeline {
             val why = if (channel == Channel.NOTIFICATION) {
                 PaymentTextParser.diagnose(sourceKey, rawText)
             } else {
-                "页面文本里没找到可用的金额/方向"
+                PageTextParser.diagnose(rawText)
             }
             CaptureEventLog.record(packageName, false, "解析失败：$why", rawText)
             return Outcome.Unparsable
@@ -107,6 +107,11 @@ object IngestPipeline {
         // 真实收入在银行/微信/支付宝那边一定有对应记录，漏不掉。
         if (parsed.direction == Direction.INCOME && sourceKey !in INCOME_ALLOWED_SOURCES) {
             Log.i(TAG, "来源 $sourceKey 不在收入白名单，放弃：${parsed.amountCents}分")
+            CaptureEventLog.record(
+                packageName, false,
+                "收入来源「" + sourceKey + "」不在白名单（只认银行/微信/支付宝），放弃",
+                rawText,
+            )
             return Outcome.Unsupported
         }
 
@@ -183,10 +188,22 @@ object IngestPipeline {
                     )
                 }
                 Log.i(TAG, "融合到已有记录 id=${existing.id}（补上商户 ${parsed.merchant}）")
+                CaptureEventLog.record(
+                    packageName, true,
+                    "融合到已有记录 id=" + existing.id + "（补上商户「" + parsed.merchant + "」）",
+                    rawText,
+                )
                 return Outcome.Merged(existing.id)
             }
 
             Log.i(TAG, "判定为重复，跳过：${parsed.amountCents}分 ${parsed.direction}")
+            CaptureEventLog.record(
+                packageName, true,
+                "判定为重复，未新建记录（已有 id=" + existing.id + "，" +
+                    (parsed.amountCents / 100.0) + " 元 " + parsed.direction + "，" +
+                    "商户「" + existing.merchant.ifBlank { "无" } + "」）",
+                rawText,
+            )
             return Outcome.Duplicate(existing.id)
         }
 
@@ -213,6 +230,15 @@ object IngestPipeline {
                 confidence = parsed.confidence,
                 sourceKey = sourceKey,
             )
+        )
+
+        CaptureEventLog.record(
+            packageName, true,
+            "已入账：" + (parsed.amountCents / 100.0) + " 元 " + parsed.direction +
+                "｜商户「" + parsed.merchant.ifBlank { "无" } + "」" +
+                "｜分类 " + (category?.name ?: "其他") +
+                "｜通道 " + channel,
+            rawText,
         )
 
         if (evidenceId > 0) {

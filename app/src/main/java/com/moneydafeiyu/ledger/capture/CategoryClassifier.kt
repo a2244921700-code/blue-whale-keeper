@@ -30,6 +30,31 @@ object CategoryClassifier {
         val words: List<CategoryKeywordEntity>,
     )
 
+    /**
+     * 营销文案特征 —— 命中就**放弃支出分类**。
+     *
+     * ## 为什么需要这一层
+     *
+     * 支付宝的通知里塞满了这种句子：
+     *   「你有一笔0.08元的支出，**领1元生活缴费红包**。」
+     * 里面「生活缴费」四个字会被词库当成强信号词命中，
+     * 于是这笔 0.08 元的支出被归到「生活缴费」—— 完全错了，
+     * 它只是一条**诱导点击的广告**，商户名根本是空的。
+     *
+     * 词库里其实早就写了「红包」作为排除词，但依赖词库同步；
+     * 这里再加一道**代码层的**，不依赖任何导入流程。
+     *
+     * ## 为什么只对支出生效
+     *
+     * 「红包」在**收入**场景里是正当的（「红包转账」分类）。
+     * 只有支出场景下它才意味着营销文案。
+     */
+    private val MARKETING_MARKERS = listOf(
+        "领取", "领1元", "领2元", "领3元", "领5元", "领红包", "点击领取",
+        "优惠券", "立减", "随机立减", "消费券", "满减",
+        "点击查看", "点击参与", "立即领取", "恭喜获得",
+    )
+
     @Volatile
     private var cache: List<CategoryWithWords>? = null
 
@@ -62,6 +87,16 @@ object CategoryClassifier {
         direction: String,
     ): Long? {
         if (text.isBlank()) return null
+
+        // 营销文案 → 不参与分类。
+        // 这类文本的"商户名"是假的（其实是广告词），
+        // 硬分类只会得到错误结果，不如老实落到「其他」。
+        if (direction == com.moneydafeiyu.ledger.data.model.Direction.EXPENSE &&
+            MARKETING_MARKERS.any { text.contains(it) }
+        ) {
+            return null
+        }
+
         val data = load(context)
 
         var bestScore = 0

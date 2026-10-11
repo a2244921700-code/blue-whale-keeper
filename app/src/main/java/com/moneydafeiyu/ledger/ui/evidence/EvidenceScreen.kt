@@ -33,6 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -52,7 +55,7 @@ import kotlinx.coroutines.delay
  * 采集调试台。
  *
  * 顶部三段体检回答「链路通不通」，中间的事件流回答「服务有没有被调用」，
- * 底部证据列表回答「到底抓到了什么」。三者合起来能定位任何采集失败。
+ * 底部的调试参考记录回答「到底抓到了什么」。三者合起来能定位任何采集失败。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +64,15 @@ fun EvidenceScreen(
     onOpenParserTest: () -> Unit = {},
     vm: EvidenceViewModel = viewModel(),
 ) {
+    // 调试参考记录默认**收起来**。
+    // 它是排查问题用的，平时没必要铺满屏幕；而且名字里带"记录"而不是"证据"，
+    // 是为了避免让人误以为这软件在偷偷收集什么。
+    var recordListExpanded by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    var showComingSoon by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
     val context = LocalContext.current
     val list by vm.recent.collectAsStateWithLifecycle()
 
@@ -98,6 +110,7 @@ fun EvidenceScreen(
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item { PageSignatureSection() }
             item {
                 DiagnosticCard(
                     granted = granted,
@@ -119,7 +132,7 @@ fun EvidenceScreen(
             border = JellyBorder,
         ) {
                     Column(Modifier.padding(14.dp)) {
-                        Text("重新解析历史证据", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text("重新解析历史记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text(
                             "把库里已抓到的原文按**当前规则**重跑一遍。规则改了不用重新支付，" +
                                 "点这里就能立刻看到新效果（内部有去重，不会重复记账）。",
@@ -235,18 +248,42 @@ fun EvidenceScreen(
                 }
             }
 
+            // ---- 折叠标题 ----
             item {
-                Text(
-                    "已入库证据（${list.size} 条，最新在上）",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(start = 4.dp, top = 8.dp),
-                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { recordListExpanded = !recordListExpanded }
+                        .padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "已入库调试参考记录（${list.size} 条）",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            "仅供排查问题时查看，不影响记账。最多保留 150 条，超出会自动清理最旧的。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        if (recordListExpanded) "收起 ▲" else "展开 ▼",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
+
+            if (!recordListExpanded) {
+                // 收起来时什么都不渲染 —— 这就是默认状态
+            } else {
 
             if (list.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        Text("还没有入库的证据", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("还没有调试参考记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -276,7 +313,23 @@ fun EvidenceScreen(
                     }
                 }
             }
+            }   // 闭合 else（展开状态）
         }
+    }
+
+    // 「功能开发中」提示 —— 导出/导入暂时只是占位，但先把入口摆出来，
+    // 免得用户以为这软件不支持换机迁移。
+    showComingSoon?.let { name ->
+        AlertDialog(
+            onDismissRequest = { showComingSoon = null },
+            title = { Text(name) },
+            text = {
+                Text("功能开发中，敬请期待。\n\n做好之后，换手机时就能把账本原样搬过去了。")
+            },
+            confirmButton = {
+                TextButton(onClick = { showComingSoon = null }) { Text("知道了") }
+            },
+        )
     }
 }
 
@@ -342,4 +395,80 @@ private fun StepRow(index: String, ok: Boolean, title: String, detail: String) {
             Text(detail, style = MaterialTheme.typography.labelSmall, color = if (ok) IncomeGreen else ExpenseRed)
         }
     }
+}
+
+
+/**
+ * 「已记住的支付页面」区块。
+ *
+ * 教过的页面会出现在这里。教错了（比如把聊天页当支付页记下）
+ * 可以直接删掉，否则以后每次进那个页面都会白截一次图。
+ */
+@androidx.compose.runtime.Composable
+fun PageSignatureSection(modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var sigs by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(
+            com.moneydafeiyu.ledger.capture.PageSignatureStore.all(context)
+        )
+    }
+
+    androidx.compose.material3.Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+    ) {
+        androidx.compose.foundation.layout.Column(
+            androidx.compose.ui.Modifier.padding(14.dp)
+        ) {
+            androidx.compose.material3.Text(
+                "已记住的支付页面（" + sigs.size + "）",
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            )
+            androidx.compose.material3.Text(
+                "微信支付页读不出文字，只能靠截图识别。\n" +
+                    "教一次之后就自动认 —— 这里是已教过的页面。",
+                style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (sigs.isEmpty()) {
+                androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.height(8.dp))
+                androidx.compose.material3.Text(
+                    "还没有。下次遇到读不出文字的支付页时，\n" +
+                        "通知栏会弹一条「认不出这个页面？」，点一下就行。",
+                    style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                )
+            } else {
+                sigs.forEach { s ->
+                    androidx.compose.foundation.layout.Row(
+                        androidx.compose.ui.Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.weight(1f)) {
+                            androidx.compose.material3.Text(
+                                s.packageName.substringAfterLast('.'),
+                                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                            )
+                            androidx.compose.material3.Text(
+                                s.activityName.substringAfterLast('.') + "  ·  " + s.label,
+                                style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        androidx.compose.material3.TextButton(onClick = {
+                            com.moneydafeiyu.ledger.capture.PageSignatureStore.remove(context, s.key())
+                            sigs = com.moneydafeiyu.ledger.capture.PageSignatureStore.all(context)
+                        }) { androidx.compose.material3.Text("删除") }
+                    }
+                }
+                androidx.compose.material3.TextButton(onClick = {
+                    com.moneydafeiyu.ledger.capture.PageSignatureStore.clear(context)
+                    sigs = emptyList()
+                }) { androidx.compose.material3.Text("全部清空") }
+            }
+        }
+    }
+
 }

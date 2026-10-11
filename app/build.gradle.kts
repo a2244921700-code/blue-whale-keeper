@@ -8,7 +8,7 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-// 签名配置从 keystore.properties 读取，密码不进版本库
+// 签名配置�?keystore.properties 读取，密码不进版本库
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -33,10 +33,10 @@ android {
         applicationId = "com.moneydafeiyu.ledger"
         minSdk = 26
         targetSdk = 34
-        versionCode = 112
-        versionName = "1.0.12"
+        versionCode = 10114
+        versionName = "1.1.14"
         resourceConfigurations += listOf("zh", "en")
-        // 硬性要求：只保留 arm64，配合 R8 才能把包控制在 ~14MB
+        // 硬性要求：只保�?arm64，配�?R8 才能把包控制�?~14MB
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -57,7 +57,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        // 打开它才能用 BuildConfig.VERSION_NAME 在「关于」里显示版本�?        buildConfig = true
+    }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
@@ -84,7 +87,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // 离线中文 OCR（微信链路），打包进 APK 不依赖 GMS
+    // 离线中文 OCR（微信链路），打包进 APK 不依�?GMS
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

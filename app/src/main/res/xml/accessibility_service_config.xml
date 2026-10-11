@@ -9,6 +9,7 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="100"
     android:packageNames="com.eg.android.AlipayGphone,com.tencent.mm,com.taobao.taobao,com.taobao.idlefish,com.jingdong.app.mall,com.jd.jrapp,com.xunmeng.pinduoduo,com.unionpay,com.unionpay.mobilepay,com.android.incallui,com.android.dialer,com.android.server.telecom,com.google.android.dialer,com.hihonor.incallui,com.hihonor.phone,com.hihonor.contacts,com.huawei.incallui,com.huawei.phone,com.huawei.contacts,com.android.contacts,com.miui.incallui,com.android.phone" />

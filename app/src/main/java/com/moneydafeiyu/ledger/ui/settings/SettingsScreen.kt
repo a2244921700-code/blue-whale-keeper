@@ -99,7 +99,17 @@ fun SettingsScreen(
             item {
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp)) {
                     Column(Modifier.padding(14.dp)) {
-                        Text("关于", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("关于", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(8.dp))
+                            // 版本号直接读构建产物里的值，不会和 APK 对不上
+                            Text(
+                                "v" + appVersionName(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
                         Text(
                             "蓝色大肥鱼管家 · 完全本地记账，不联网、不上传。所有数据只存在这台手机上。",
                             style = MaterialTheme.typography.labelSmall,
@@ -130,5 +140,23 @@ private fun SettingRow(emoji: String, title: String, desc: String, onClick: () -
             }
             Text("›", style = MaterialTheme.typography.titleMedium)
         }
+    }
+}
+
+
+/**
+ * 读当前安装包的版本号。
+ *
+ * 刻意**不用 BuildConfig**：那次 release 变体下死活解析不出来。
+ * 直接从 PackageManager 读已安装包的元数据更直接 ——
+ * 它显示的就是系统"应用信息"里那个版本号，永远不会对不上。
+ */
+@androidx.compose.runtime.Composable
+private fun appVersionName(): String {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember {
+        runCatching {
+            ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        }.getOrNull() ?: "?"
     }
 }

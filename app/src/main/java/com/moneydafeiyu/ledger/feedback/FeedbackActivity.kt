@@ -51,6 +51,20 @@ import kotlinx.coroutines.delay
 class FeedbackActivity : ComponentActivity() {
 
     companion object {
+
+        /**
+         * 当前正在播放的音效。
+         *
+         * **必须是静态的**：如果只在方法里持有局部变量，函数返回后就没有强引用了，
+         * GC 会在音频播到一半时回收 MediaPlayer —— 听起来就是"话说了一半突然没声"。
+         * 放静态引用里，生命周期就和 Activity 解耦：弹窗关掉、页面切走，声音照播完。
+         *
+         * 同一时刻只留一个：连点两次记账不该两段声音叠在一起。
+         */
+        @Volatile
+        private var currentPlayer: android.media.MediaPlayer? = null
+        private const val TAG = "FeedbackActivity"
+
         const val EXTRA_ASSET = "asset"
         const val EXTRA_CAPTION = "caption"
         const val EXTRA_AMOUNT = "amount"
@@ -122,20 +136,21 @@ class FeedbackActivity : ComponentActivity() {
         if (name.isBlank()) return
 
         // 尊重用户的静音意愿：手机调到振动/静音时不发声（插画照常弹）。
-        // 想让它无论如何都说话，去设置里打开「静音时也播放音效」。
         val am = context.getSystemService(AudioManager::class.java)
         val silent = am?.ringerMode != AudioManager.RINGER_MODE_NORMAL
         if (silent && !CaptureSettings.isSoundWhenSilent(context)) {
-            Log.i("FeedbackActivity", "手机处于静音/振动模式，跳过音效")
+            Log.i(TAG, "手机处于静音/振动模式，跳过音效")
             return
         }
 
         runCatching {
+            // 先停掉上一段（连点两次记账时不该两段声音叠在一起）
+            runCatching { currentPlayer?.stop() }
+            runCatching { currentPlayer?.release() }
+            currentPlayer = null
+
             val afd = context.assets.openFd("sounds/$name")
             val player = MediaPlayer()
-            // 明确声明走**媒体流**：
-            // 媒体流只受"媒体音量"控制，不会因为用户关掉通知音量就哑掉，
-            // 行为最可预期。（静音与否由上面的判断决定，不交给系统流类型。）
             player.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -144,11 +159,35 @@ class FeedbackActivity : ComponentActivity() {
             )
             player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             afd.close()
-            player.setOnCompletionListener { runCatching { it.release() } }
-            player.setOnErrorListener { mp, _, _ -> runCatching { mp.release() }; true }
+
+            player.setOnCompletionListener { mp ->
+                runCatching { mp.release() }
+                if (currentPlayer === mp) currentPlayer = null
+            }
+            player.setOnErrorListener { mp, _, _ ->
+                runCatching { mp.release() }
+                if (currentPlayer === mp) currentPlayer = null
+                true
+            }
             player.prepare()
             player.start()
-        }.onFailure { Log.w("FeedbackActivity", "音效播放失败: $name", it) }
+
+            // ★ 关键：存进**静态**引用。
+            //
+            // 原来 player 是局部变量，函数一返回就没人引用了 ——
+            // GC 一跑 MediaPlayer 被回收，音频断在半截（用户听到的"一两秒"）。
+            // 而且插画弹窗 2.8 秒就关了，Activity 一销毁更没有引用能撑住它。
+            //
+            // 放 companion object 里，生命周期就和 Activity 解耦了：
+            // 弹窗关掉、页面切走，声音照样播完。
+            currentPlayer = player
+        }.onFailure { Log.w(TAG, "音效播放失败: $name", it) }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 刻意**不**在这里 release —— 音频要能在弹窗关闭后继续播完。
+        // 释放交给 OnCompletionListener。
     }
 }
 

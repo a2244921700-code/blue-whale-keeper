@@ -64,6 +64,37 @@ object BuiltinFeedback {
             variantGroup = "food",
         ),
 
+        // ---- 分类专属反馈（每种分类一张，避免"记上了却没人吭声"）----
+        //
+        // 之前只有餐饮、收入、大额这几个情景有反馈图，
+        // 结果记了一笔"生活缴费"却什么都不弹 —— 用户根本不知道自己记上了。
+        // 现在把每个分类都补一张。
+        FeedbackRuleEntity(
+            code = "R-17", priority = 33,
+            matchType = MatchType.CATEGORY, matchValue = "交通",
+            assetName = "cat_transport.webp", caption = "又出门啦",
+        ),
+        FeedbackRuleEntity(
+            code = "R-18", priority = 34,
+            matchType = MatchType.CATEGORY, matchValue = "购物",
+            assetName = "cat_shopping.webp", caption = "又买了什么好东西",
+        ),
+        FeedbackRuleEntity(
+            code = "R-19", priority = 35,
+            matchType = MatchType.CATEGORY, matchValue = "医疗",
+            assetName = "cat_medical.webp", caption = "身体要紧",
+        ),
+        FeedbackRuleEntity(
+            code = "R-20", priority = 36,
+            matchType = MatchType.CATEGORY, matchValue = "娱乐",
+            assetName = "cat_entertainment.webp", caption = "玩得开心点",
+        ),
+        FeedbackRuleEntity(
+            code = "R-21", priority = 37,
+            matchType = MatchType.CATEGORY, matchValue = "生活缴费",
+            assetName = "cat_utility.webp", caption = "又到了交钱的日子",
+        ),
+
         // ---- 收入 ----
         FeedbackRuleEntity(
             code = "R-13", priority = 40,
