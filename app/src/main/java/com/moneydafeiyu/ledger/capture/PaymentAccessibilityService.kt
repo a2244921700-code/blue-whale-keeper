@@ -132,6 +132,27 @@ class PaymentAccessibilityService : AccessibilityService() {
         private var payPageUntil: Long = 0L
 
         /**
+         * 刚离开微信的时刻（0 = 从没离开过）。
+         *
+         * 用途：**微信小程序的包名各不相同**，无法靠包名白名单覆盖。
+         * 但小程序的付款流程有个特点 —— 用户是从微信里点进去的，
+         * 所以「刚离开微信」这段时间里出现的页面，很可能就是小程序支付页。
+         *
+         * 于是这里开一个 1 分钟的尾随窗口：窗口内对**任意前台应用**照常检测，
+         * 窗口一过就恢复只认白名单。这样既覆盖了小程序，
+         * 又不用去猜每个小程序的进程名。
+         */
+        @Volatile
+        private var leftWechatAt: Long = 0L
+
+        /** 尾随窗口时长：离开微信后继续监测这么久 */
+        private const val WECHAT_TAIL_WINDOW_MS = 60_000L
+
+        /** 上一次的前台包名，用来发现「刚从微信切走」这件事 */
+        @Volatile
+        private var lastForegroundPkg: String = ""
+
+        /**
          * event.source 抓到的文本。
          *
          * 事件自带的 source 节点是「触发这个事件的那个节点」，
@@ -219,6 +240,13 @@ class PaymentAccessibilityService : AccessibilityService() {
         private val BROWSING_MARKERS = listOf(
             "交易详情", "账单详情", "交易单号", "商户单号", "全部会话", "消息盒子",
             "使用零钱支付", "使用零钱通支付", "点击查看全部消息",
+            
+            // 电商 App 的「我的」页面 —— 整屏都是红包、优惠券、积分的数字，
+            // 而且带 ¥ 号，所以很容易被「页面有金额」这条判据误命中。
+            // 实测淘宝首页被认成支付结果页，还从「红包 ¥71」里抠出了金额。
+            "我的淘宝", "我的京东", "我的拼多多", "我的订单", "全部订单",
+            "待付款", "待发货", "待收货", "待评价", "退款/售后",
+            "芭芭农场", "领淘金币", "红包签到", "猜你喜欢", "关注店铺",
         )
 
         /** 微信支付页的类名特征 —— 决定要不要动用 OCR 这张重牌 */
@@ -303,7 +331,20 @@ class PaymentAccessibilityService : AccessibilityService() {
             return
         }
 
-        val sourceKey = SourcePackages.of(pkg) ?: return
+        var sourceKey = SourcePackages.of(pkg)
+
+        // ---- 微信小程序兜底 ----
+        //
+        // 很多餐饮店走的是「收钱吧」这类小程序联合收款，包名各不相同，
+        // 白名单永远列不全。但它们的付款结果页仍然是**微信的自绘页面**。
+        //
+        // 判据：用户是从微信点进小程序的，所以「刚离开微信」的这段时间里
+        // 出现的未知包名，很可能就是小程序支付页 —— 此时按微信生态处理。
+        if (sourceKey == null) {
+            val sinceLeft = System.currentTimeMillis() - leftWechatAt
+            if (leftWechatAt == 0L || sinceLeft > WECHAT_TAIL_WINDOW_MS) return
+            sourceKey = SourceKey.WECHAT
+        }
 
         // ★ 两种事件要分开对待，这是重写后的核心。
         //
@@ -314,6 +355,15 @@ class PaymentAccessibilityService : AccessibilityService() {
         //                                对识别支付页毫无价值，只当作"内容还在变"的信号
         //
         // 之前我把两者混在一起用同一个 className 判断，等于永远匹配不上。
+        // ---- 跟踪前台切换，发现「刚离开微信」----
+        if (pkg != lastForegroundPkg) {
+            if (lastForegroundPkg == SourcePackages.WECHAT_PACKAGE && pkg != SourcePackages.WECHAT_PACKAGE) {
+                leftWechatAt = System.currentTimeMillis()
+                CaptureEventLog.record(pkg, false, "离开微信 → 接下来 1 分钟继续监测（可能是小程序支付）", "")
+            }
+            lastForegroundPkg = pkg
+        }
+
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 val cls = e.className?.toString().orEmpty()
@@ -517,11 +567,18 @@ class PaymentAccessibilityService : AccessibilityService() {
             }
             CaptureEventLog.record(pkg, false, "读屏未命中：$why｜" + (if (inPayFlow) "支付流程中" else "流程外"), text)
         }
-
-        // 主路没读到内容 —— 可能是自绘页面，考虑动用 OCR 兜底。
-        // 走统一入口 triggerOcr：以前这里另有一条 maybeOcr，两条路各自判节流、
-        // 互相不知道对方，等于双倍截图 —— 手机发烫的主因之一。
-        triggerOcr(sourceKey, pkg)
+        // 主路没读到内容 —— 如果是微信，可能是它的自绘支付页，这时才动用 OCR。
+        //
+        // ★ 这里必须限定平台。只有微信的支付页是自绘的（节点里读不到文字），
+        //   淘宝、京东、拼多多的页面节点文字都读得到，对它们截图识别纯属浪费，
+        //   而且会把商品价格、活动文案当成交易 —— 实测淘宝的「我的」页面
+        //   和消息列表都被 OCR 读过，还把一条「交易成功 720.00元到账」的消息
+        //   记成了一笔支出。
+        //
+        //   （v1.1.15 合并两条 OCR 路径时漏掉了这个判断，这里补回来。）
+        if (sourceKey == SourceKey.WECHAT) {
+            triggerOcr(sourceKey, pkg)
+        }
     }
 
     private fun submit(sourceKey: String, pkg: String, text: String, channel: String) {
@@ -575,6 +632,7 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         // ① 类名命中 —— 最可靠，直接认
         if (WECHAT_RESULT_CLASSES.any { lower.contains(it) }) return true
+
 
         val hasAmount = Regex("[¥￥]\\s*[0-9]").containsMatchIn(text) ||
             Regex("[0-9]+\\.[0-9]{2}\\s*元").containsMatchIn(text)
@@ -855,14 +913,26 @@ class PaymentAccessibilityService : AccessibilityService() {
 
     private fun looksLikePaymentResult(text: String): Boolean {
         val compact = text.replace(Regex("\\s+"), "")
+
+        // ① 失败页直接排除
         if (FAILURE_MARKERS.any { compact.contains(it) }) return false
-        // ① 成功标记优先 —— 支付成功页也会带单号，不能被浏览页规则误杀
+
+        // ② 成功标记优先 —— 支付成功页也可能带单号、带「红包」字样（优惠抵扣），
+        //    所以成功标记必须在所有排除规则之前判定，否则会被误杀。
         if (SUCCESS_MARKERS.any { compact.contains(it) }) return true
 
-        // ② 转账 / 红包页的结构判定
+        // ③ ★ 浏览页 / 电商首页排除。
         //
-        // 光靠枚举文案一定会漏（"已转账给张三""红包已发出"…列不完），
-        // 所以补一条结构规则：**页面上同时有「金额」和「转账/红包」字样**，
+        // 这一步**必须放在下面的结构判定之前**，否则电商首页会先一步命中：
+        // 淘宝「我的」页面满屏红包、优惠券、积分，既有 ¥ 号又有「红包」二字，
+        // 正好满足「有金额 + 有转账/红包字样」这条宽松规则 ——
+        // 实测就是这样把「红包 ¥71」读成了一笔 71 元的支出。
+        if (BROWSING_MARKERS.any { compact.contains(it) }) return false
+
+        // ④ 转账 / 红包页的结构判定
+        //
+        // 光靠枚举文案一定会漏（"已转账给张三""红包已发出"… 列不完），
+        // 所以补一条结构规则：页面上同时有「金额」和「转账/红包」字样，
         // 就认为这是一笔真实的资金流动。
         //
         // 放宽的代价可控：这类页面通常没有商户名 → 分类不确定 →
@@ -872,8 +942,6 @@ class PaymentAccessibilityService : AccessibilityService() {
         val hasTransferWord = TRANSFER_WORDS.any { compact.contains(it) }
         if (hasAmount && hasTransferWord) return true
 
-        // ③ 没有成功标记，又像账单浏览页 → 是用户在看历史，不是新交易
-        if (BROWSING_MARKERS.any { compact.contains(it) }) return false
         return false
     }
 

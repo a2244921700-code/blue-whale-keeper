@@ -45,6 +45,17 @@ object SourceKey {
 
 /** 包名 → 来源。M2 采集通道用这张表做白名单 */
 object SourcePackages {
+
+    /**
+     * 微信的包名。
+     *
+     * 单独提出来是因为它有个特殊用途：**判断「用户是否刚离开微信」**。
+     * 小程序的包名各不相同（收钱吧、各种点单小程序…），白名单列不全，
+     * 但用户总是从微信点进去的 —— 所以「刚离开微信」这段时间里出现的
+     * 未知包名，很可能就是小程序支付页。
+     */
+    const val WECHAT_PACKAGE = "com.tencent.mm"
+
     val map: Map<String, String> = mapOf(
         "com.tencent.mm" to SourceKey.WECHAT,
         "com.eg.android.AlipayGphone" to SourceKey.ALIPAY,

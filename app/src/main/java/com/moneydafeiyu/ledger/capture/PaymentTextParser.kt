@@ -241,6 +241,17 @@ object PaymentTextParser {
     /** 「人民币」后面的数字 —— 银行到账通知的标准写法 */
     private val RMB_AMOUNT = Regex("人民币\\s*" + NUM)
 
+    /**
+     * 「实付 / 付款金额 / 订单金额」这类**带标签**的金额 —— 电商通知里最可信的那个。
+     *
+     * 为什么需要它：淘宝、京东、拼多多的通知里**往往有多个 ¥** ——
+     * 订单总额一个、红包抵扣一个、优惠券一个、积分抵扣一个。
+     * 之前这些来源统一走「取第一个 ¥」，而第一个未必是实付金额。
+     */
+    private val PAID_NEAR = Regex(
+        "(?:实付|实付款|付款金额|支付金额|订单金额|应付|已付|共计|合计)\\s*[:：]?\\s*[¥￥]?\\s*" + NUM
+    )
+
     data class AmountHit(val cents: Long, val rule: String)
 
     /**
@@ -264,6 +275,17 @@ object PaymentTextParser {
 
             // 银行：「人民币」优先（卡号不会被误认），没有才退回 ¥
             SourceKey.BANK -> first(RMB_AMOUNT, "bank.rmb") ?: first(SYMBOL_FIRST, "bank.symbol")
+
+            // 电商：先找「实付 / 订单金额」这种带标签的，最可信；
+            // 找不到才退回「第一个 ¥」。
+            //
+            // 淘宝、京东、拼多多的通知里常有好几个 ¥（订单总额、红包、优惠券、
+            // 积分抵扣），直接取第一个很容易抓错 —— 实测淘宝那笔离谱的 710 元
+            // 就是这么来的。
+            SourceKey.TAOBAO, SourceKey.JD, SourceKey.PDD ->
+                first(PAID_NEAR, "shop.labeled")
+                    ?: first(SYMBOL_FIRST, "shop.symbol")
+                    ?: first(YUAN_LAST, "shop.yuan")
 
             // 其他来源：两种锚点都试，先 ¥ 后 元
             else -> first(SYMBOL_FIRST, "any.symbol") ?: first(YUAN_LAST, "any.yuan")
