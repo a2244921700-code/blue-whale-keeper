@@ -154,6 +154,32 @@ object IngestPipeline {
         // 而每天都吃同一家的同一份饭，金额相同是常态。
         // 只有「两边都有名字且不一样」才排除；
         // 一方为空时仍视为可能重复（银行通知就没有商户名）。
+        // ---- 先查墓碑：这一笔用户是不是删过？----
+        //
+        // 删除是软删除，记录还在库里挂着 DELETED。而通知会重复到达
+        // （微信会更新同一条通知），于是「删掉 → 通知再来 → 又建一笔」
+        // 会无限循环 —— 用户看到的现象就是删了又回来、每次更新后都在。
+        //
+        // 发现同额同向的记录已被删过，就说明他不要这一笔，安静跳过。
+        val tombstones = txDao.findDuplicatesIncludingDeleted(
+            parsed.direction,
+            parsed.amountCents,
+            occurredAt - window,
+            occurredAt + window,
+        ).filter { it.status == TxStatus.DELETED }
+
+        if (tombstones.isNotEmpty()) {
+            val ghost = tombstones.first()
+            Log.i(TAG, "这一笔用户已删除过（id=" + ghost.id + "），不再重建")
+            CaptureEventLog.record(
+                packageName, false,
+                "这笔已被你删除过，不再重建（" + (parsed.amountCents / 100.0) + " 元 " +
+                    parsed.direction + "，墓碑 id=" + ghost.id + "）",
+                rawText,
+            )
+            return Outcome.Duplicate(ghost.id)
+        }
+
         val existing = candidates.firstOrNull { c ->
             val a = c.merchant.trim()
             val b = parsed.merchant.trim()

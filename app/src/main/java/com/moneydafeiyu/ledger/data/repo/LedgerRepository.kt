@@ -436,7 +436,35 @@ class LedgerRepository(
 
     suspend fun setStatus(txId: Long, status: String) = txDao.updateStatus(txId, status)
 
-    suspend fun softDelete(txId: Long) = txDao.updateStatus(txId, TxStatus.DELETED)
+    /**
+     * 删除一条记录。
+     *
+     * ## 为什么删记录还要动证据表
+     *
+     * 这是「删掉的记录会在更新软件后又回来」的根因所在。
+     *
+     * 删除本身只是把 status 标成 DELETED（软删除，记录仍在库里不显示）。
+     * 但 App 冷启动时有一段**自动重放**逻辑：
+     *
+     *     if (unparsedEvidenceCount() > 0) replayEvidence()
+     *
+     * 它的初衷是好的 —— 用户升级到解析规则更强的版本后，让之前没解析成功的
+     * 旧证据自动补跑一遍。但副作用是：**它会拿你早已删掉的那条证据重新建一笔**。
+     *
+     * 所以删除时必须连证据一起处理：把关联的原始证据标记成 DISCARDED，
+     * 而 loadForReplay 会跳过 DISCARDED —— 重放就再也碰不到它了。
+     */
+    suspend fun softDelete(txId: Long) {
+        txDao.updateStatus(txId, TxStatus.DELETED)
+
+        // 把这条记录对应的原始证据也标记掉，断掉自动重放重建它的可能
+        runCatching {
+            val ids = db.transactionEvidenceDao().evidenceIdsOf(txId)
+            ids.forEach { eid ->
+                evidenceDao.updateState(eid, ProcessState.DISCARDED, "用户已删除该记录")
+            }
+        }
+    }
 
     suspend fun maxExpenseCents(): Long = txDao.maxExpenseCents() ?: 0L
 

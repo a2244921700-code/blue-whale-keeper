@@ -285,6 +285,31 @@ class PaymentAccessibilityService : AccessibilityService() {
             "payorderdetail",   // 订单详情
         )
 
+    /**
+     * 图片浏览类页面的类名特征 —— 命中就**不触发 OCR**。
+     *
+     * ## 为什么需要它
+     *
+     * 触发 OCR 的判据是「读不到节点文字」。它本意是对的 ——
+     * 微信支付页是自绘的，节点里确实读不到文字。
+     *
+     * 但**相册、图片预览这些页面同样读不到文字**，于是也被判成自绘支付页，
+     * 对着图片做 OCR，把图里的内容当成交易。
+     * 实测用户只是打开扫一扫挑一张收款码截图，就被连续识别了四次，
+     * 记出四笔乱码账单。
+     *
+     * 「看不到文字」不等于「这是支付页」—— 图片页面就是最典型的反例。
+     */
+    private val IMAGE_VIEWER_CLASSES = listOf(
+        "albumpreview", "gallery", "imagepreview", "photopreview",
+        "mediapreview", "picturepreview", "imageviewer", "photoeditor",
+        "cameraui", "imagepicker", "albumui", "mediapicker",
+        // 微信所有跟图片打交道的页面都在这个包下：
+        // 相册、图片选择器、预览、编辑… 直接按包名一网打尽，
+        // 免得每遇到一个新页面就要补一次类名。
+        "plugin.gallery",
+    )
+
         private val WECHAT_PAY_HINTS = listOf("微信支付", "支付", "付款", "收款", "转账")
 
     }
@@ -576,6 +601,10 @@ class PaymentAccessibilityService : AccessibilityService() {
         //   记成了一笔支出。
         //
         //   （v1.1.15 合并两条 OCR 路径时漏掉了这个判断，这里补回来。）
+        // 图片浏览页不算「自绘支付页」—— 那里的"读不到文字"是因为它就是一张图，
+        // 对它做 OCR 只会把图里的内容（比如别人发的收款码截图）当成交易。
+        if (isImageViewerPage(className)) return
+
         if (sourceKey == SourceKey.WECHAT) {
             triggerOcr(sourceKey, pkg)
         }
@@ -680,6 +709,13 @@ class PaymentAccessibilityService : AccessibilityService() {
      * 也就是说，是用户明确教过的那些自绘支付页。
      * 没教过的页面一次都不会截，开销完全可控。
      */
+    /** 当前页面是不是「图片浏览」类页面（相册、图片预览、选图器…） */
+    private fun isImageViewerPage(className: String): Boolean {
+        if (className.isBlank()) return false
+        val lower = className.lowercase()
+        return IMAGE_VIEWER_CLASSES.any { lower.contains(it) }
+    }
+
     private fun triggerOcr(sourceKey: String, pkg: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             CaptureEventLog.record(pkg, false, "系统版本低于 Android 11，不支持截图 OCR", "")
@@ -803,19 +839,87 @@ class PaymentAccessibilityService : AccessibilityService() {
      *
      * 干扰特征来自聊天列表和账单列表 —— 它们都有金额，但都不是一笔新交易。
      */
+    /**
+     * 营销 / 抽奖活动页面的特征词 —— 命中就整条放弃。
+     *
+     * 实测踩到的场景：扫码付款后商家的小程序弹出一个抽奖页，页面上写着
+     * 「每 20人·1人全额免单·**最高¥1000**」—— 那个 ¥1000 是**奖品上限**，
+     * 却被当成付款金额记了一笔 1000 元的支出。而真实的 ¥0.07 因为 OCR 把它
+     * 拆成「支付成功¥」换行「%07」（0 认成了 %）没能提取出来。
+     *
+     * 「免单」是最强的信号 —— 真实支付结果页不会出现这个词。
+     */
+    /**
+     * 独占一行的金额 —— 真实支付页的金额是大字，单独占一行。
+     *
+     * 用来挡住「有支付字样但整屏是乱码」的情况：乱码里的数字总是嵌在句子中间。
+     * 实测相册图片被 OCR 出来的文本：
+     *     微他变付8支:已支付      ← 含「已支付」，能骗过成功标记
+     *     va.85letva.85          ← 但金额没独占行
+     * 用 MULTILINE 匹配整行，两侧允许空白。
+     */
+    private val AMOUNT_ON_OWN_LINE = Regex("(?m)^[ \\t]*[¥￥]?[ \\t]*[0-9]{1,7}(?:\\.[0-9]{1,2})?[ \\t]*$")
+
+    private val AD_PAGE_MARKERS = listOf(
+        "免单", "全额免单", "最高免单", "奖池", "开奖", "恭喜中奖", "中奖名单",
+        "参与活动", "活动规则", "抽奖活动", "百分百中奖", "立即抽奖", "再来一次",
+    )
+
+    /**
+     * 成功文案的判定 —— **带 OCR 容错**。
+     *
+     * OCR 常在词中间多认出一两个字：实测把「支付成功」读成了「**支付成成功**」，
+     * 而原来的精确匹配（\`SUCCESS_MARKERS.any { contains(it) }\`）直接就废了 ——
+     * 明明读屏已经命中，OCR 这关却把它拦下，用户看到的就是"识别到了却不入账"。
+     *
+     * 所以补一层宽松判据：只要「支付/付款/交易」和「成功」都出现，
+     * 中间夹了字也算数。
+     */
+    private fun looksLikeSuccessLoosely(t: String): Boolean {
+        if (SUCCESS_MARKERS.any { t.contains(it) }) return true
+        if (t.contains("成功")) {
+            if (t.contains("支付") || t.contains("付款") || t.contains("交易") ||
+                t.contains("扣款") || t.contains("收款") || t.contains("转账")
+            ) return true
+        }
+        return false
+    }
+
     private fun looksLikeRealPayPage(ocrText: String): Boolean {
         val t = ocrText.replace(Regex("\\s+"), "")
+
+        // ① 先排除营销抽奖页 —— 奖品金额会被误当成付款金额
+        val adHit = AD_PAGE_MARKERS.firstOrNull { t.contains(it) }
+        if (adHit != null) return false
 
         // ① 排除：聊天列表（有联系人、有消息预览、有置顶折叠）
         val chatMarkers = listOf("折叠置顶聊天", "语音通话", "置顶聊天", "发起群聊", "添加朋友")
         if (chatMarkers.any { t.contains(it) }) return false
 
-        // ② 排除：账单列表（底部有三个 tab，或者重复出现"查看账单详情"）
+        // ③ 排除：账单列表（底部有三个 tab，或者重复出现"查看账单详情"）
         val listTabs = listOf("我的账单", "支付服务", "摇优惠")
         if (listTabs.count { t.contains(it) } >= 2) return false
         if (t.split("查看账单详情").size > 2) return false   // 出现 2 次以上 = 列表
 
-        // ③ 必须命中强特征 —— 这些词只会出现在**单笔**支付结果页上
+        // ④ 必须命中强特征 —— 这些词只会出现在**单笔**支付结果页上
+        // 先走一遍宽松的成功判定（容 OCR 夹字，如把「支付成功」读成「支付成成功」）
+        if (looksLikeSuccessLoosely(t)) return true
+
+        // 金额必须**独占一行**。
+        //
+        // 真实支付结果页的金额是大字，单独占一行：
+        //     。支付成功
+        //     醉里挑灯(**汝)
+        //     0.01          ← 前后只有它自己
+        //     完成
+        //
+        // 而乱码文本里的数字总是嵌在句子中间 —— 实测相册图片被 OCR 出来的样子：
+        //     微他变付8支:已支付      ← 虽然含「已支付」，能骗过成功标记
+        //     va.85letva.85          ← 但金额混在乱码里，没有独占行
+        //
+        // 所以这一条能挡住「有支付字样、但整屏是乱码」的情况。
+        if (!AMOUNT_ON_OWN_LINE.containsMatchIn(ocrText)) return false
+
         val strongMarkers = listOf(
             // 支付成功页
             "支付成功", "付款成功", "交易成功",
@@ -919,7 +1023,7 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         // ② 成功标记优先 —— 支付成功页也可能带单号、带「红包」字样（优惠抵扣），
         //    所以成功标记必须在所有排除规则之前判定，否则会被误杀。
-        if (SUCCESS_MARKERS.any { compact.contains(it) }) return true
+        if (looksLikeSuccessLoosely(compact)) return true
 
         // ③ ★ 浏览页 / 电商首页排除。
         //

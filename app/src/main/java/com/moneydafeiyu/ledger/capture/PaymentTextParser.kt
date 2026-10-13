@@ -323,7 +323,7 @@ object PaymentTextParser {
                 else -> "没找到任何货币锚点（¥ 或 元）"
             }
         }
-        if (detectDirection(compact) == null && directionOf(compact) == null) {
+        if (detectDirection(compact, sourceKey) == null && directionOf(compact) == null) {
             return "有金额 " + hit.cents + " 分，但判断不出收支方向"
         }
         return "已能提取金额但没匹配到句式（规则可能漏了这种写法）"
@@ -373,7 +373,7 @@ object PaymentTextParser {
             val cents = amountHit?.cents ?: toCents(m.groupValues[1]) ?: return null
             if (cents <= 0) return null
             // 必须同时能判出方向，否则不敢记
-            val dir = detectDirection(compact) ?: return null
+            val dir = detectDirection(compact, sourceKey) ?: return null
             return ParsedResult(
                 amountCents = cents,
                 direction = dir,
@@ -388,7 +388,7 @@ object PaymentTextParser {
         amountHit?.let { h ->
             val cents = h.cents
             if (cents <= 0) return null
-            val dir = detectDirection(compact) ?: return null
+            val dir = detectDirection(compact, sourceKey) ?: return null
             return ParsedResult(
                 amountCents = cents,
                 direction = dir,
@@ -408,7 +408,36 @@ object PaymentTextParser {
         else -> null
     }
 
-    private fun detectDirection(text: String): String? {
+    /**
+     * 「钱已经出去了」的成功文案 —— 带 OCR 容错。
+     *
+     * 用在方向判定的**最后兜底**：只要有这些字样，不必再找方向词。
+     *
+     * 为什么需要：滴滴出行的支付结果页文本是
+     *   \`滴滴出行｜¥0.99｜微信支付｜关闭\`
+     * 而「微信支付」在清洗品牌名时被换成了占位符（为了不让「支付」二字
+     * 把「支付宝到账」误判成支出），结果整句里既无收入词也无支出词，
+     * 方向判不出 → 整笔丢掉。用户看到的现象就是"读屏明明命中了却不入账"。
+     *
+     * 正则里的 \`【^】】{0,2}\` 是为了容忍 OCR 夹字 ——
+     * 实测把「支付成功」读成了「支付成成功」。
+     */
+    private val SUCCESS_PATTERNS = listOf(
+        // 用 \`成.功\` 而不是「成功」—— OCR 会把中间那个字认坏：
+        // 实测「支付成功」被读成「支付成咸功」（成→咸）。
+        Regex("支付.{0,3}成.功"),
+        Regex("付款.{0,3}成.功"),
+        Regex("交易.{0,3}成.功"),
+        Regex("扣款.{0,3}成.功"),
+        Regex("退款.{0,3}成.功"),
+        // 保底：动作词 + 成功（正常情况）
+        Regex("支付[^。，,\\s]{0,2}成功"),
+        Regex("付款[^。，,\\s]{0,2}成功"),
+        Regex("已支付"),
+        Regex("已扣款"),
+    )
+
+    private fun detectDirection(text: String, sourceKey: String = ""): String? {
         // ---- 第一优先：转账/红包这类"词本身不带方向"的场景 ----
         // 顺序不能反：收入短语先查，否则「张三向我转账」会被
         // 支出短语 "向…转账" 抢走，记成一笔假支出。
@@ -435,6 +464,33 @@ object PaymentTextParser {
             // 同时出现时不敢猜，交给人工确认
             else -> null
         }
+
+        // ---- 最后兜底：成功文案本身就是方向 ----
+        //
+        // 走到这里说明品牌名清洗后既没找到收入词也没找到支出词。
+        // 但如果页面上写着「支付成功 / 付款成功 / 已支付」这类字样，
+        // 那钱显然是出去了 —— 不需要再找方向词。
+        //
+        // 放在收入短语判断之后是刻意的：「你已收款」优先，
+        // 收款页也带「成功」二字，不能让它被兜底判成支出。
+        if (SUCCESS_PATTERNS.any { it.containsMatchIn(text) }) return Direction.EXPENSE
+
+        // ---- ★ 微信来源的最终兜底 ----
+        //
+        // 微信的支付结果页**经常没有「支付成功」四个字**。实测两个真实页面：
+        //   滴滴出行｜¥0.99｜微信支付｜关闭
+        //   发仔爆椒牛肉拉面馆｜¥14.35｜微信支付｜关闭
+        // 就只是「商户名 + 金额 + 支付方式 + 关闭按钮」。
+        //
+        // 而「微信支付」这几个字在品牌名清洗时被替换掉了（为的是不让「支付」
+        // 二字把「支付宝到账」误判成支出），于是整句既无收入词也无支出词，
+        // 方向判不出 → 整笔丢掉。用户看到的就是"读屏明明命中了却不入账"。
+        //
+        // 兜底成支出是安全的：**微信的收款页在第①步就被收入短语拦走了**
+        // （你已收款 / 资金已存入零钱 / 向你转账…），走到这一步的只可能是付款。
+        if (sourceKey == SourceKey.WECHAT) return Direction.EXPENSE
+
+        return null
     }
 
     /** 常见商户句式；抓不到就留空，绝不编造 */

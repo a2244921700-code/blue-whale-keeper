@@ -122,6 +122,39 @@ interface TransactionDao {
     @Query("UPDATE transactions SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String)
 
+    /**
+     * 时间窗内同额同向的记录 —— **包含已删除的**。
+     *
+     * ## 为什么需要它
+     *
+     * 删除是软删除（status = 'DELETED'，记录仍在库里）。而通知会**重复到达**
+     * （微信会更新同一条通知，系统也可能重发），于是出现这个循环：
+     *
+     *   ① 通知到达 → 建记录 A
+     *   ② 用户删掉 A → status 变 DELETED
+     *   ③ 同一通知再次到达 → 普通去重（排除了 DELETED）找不到 A
+     *   ④ → 当成新的一笔，重建了记录 B   ← 用户看到的"删了又回来"
+     *
+     * 查一次墓碑就能打断这个循环：发现同额同向的记录已被用户删过，
+     * 就说明他不要这一笔，不再重建。
+     *
+     * 窗口仍然只是几十秒，所以"用户删了一笔 20 元，随后真的又花了 20 元"
+     * 这种误吞的概率很低；即便发生，也只是这一笔需要手动补记。
+     */
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE direction = :direction AND amountCents = :amountCents
+          AND occurredAt BETWEEN :from AND :to
+        """
+    )
+    suspend fun findDuplicatesIncludingDeleted(
+        direction: String,
+        amountCents: Long,
+        from: Long,
+        to: Long,
+    ): List<TransactionEntity>
+
     /** 时间窗内同额同向的记录，供跨 App 去重与重复检测使用 */
     @Query(
         """
