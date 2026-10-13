@@ -3,6 +3,23 @@
 > 一个**完全本地**的安卓自动记账应用 —— 不用 root，不联网，不上传。
 > 账单自动从通知栏和支付结果页里"捡"出来，记完还有只鲸鱼娘跳出来吐槽你。
 
+---
+
+## 📱 下载
+
+<h3 align="center">
+  <a href="https://github.com/a2244921700-code/blue-whale-keeper/releases/latest">
+    → 点这里下载最新版 APK ←
+  </a>
+</h3>
+
+<p align="center">
+  <sub>需要 Android 8.0 及以上 · arm64-v8a · 那个链接永远指向最新版</sub><br/>
+  <sub>装之前记得在系统设置里给「无障碍」和「通知使用权」两个权限</sub>
+</p>
+
+---
+
 <p align="center">
   <img src="docs/screenshots/01-home.jpg" width="24%" alt="首页" />
   <img src="docs/screenshots/02-fortune.jpg" width="24%" alt="当前全部身家" />
