@@ -561,7 +561,7 @@ class PaymentAccessibilityService : AccessibilityService() {
             return
         }
 
-        val hit = text.length >= 6 && (looksLikeMoneyPage(text) || looksLikePaymentResult(text))
+        val hit = text.length >= 6 && (looksLikeMoneyPage(text) || looksLikePaymentResult(text, sourceKey))
 
         if (hit) {
             lastProbeAt = System.currentTimeMillis()
@@ -903,7 +903,17 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         // ④ 必须命中强特征 —— 这些词只会出现在**单笔**支付结果页上
         // 先走一遍宽松的成功判定（容 OCR 夹字，如把「支付成功」读成「支付成成功」）
-        if (looksLikeSuccessLoosely(t)) return true
+        // ★ 支出必须留下「成」或「功」的痕迹。
+        //
+        // 依据用户实测：微信主页的聊天列表里就有一个叫「微信支付」的会话，
+        // 里面写着「已支付¥8.50」。只认「已支付」会把它当成一笔真交易。
+        //
+        // 而真实支付页必然带成功文案（支付成功 / 支付成咸功 —— OCR 把成认成咸，
+        // 但「功」字还在）。所以刻意用「成」「功」**分开**判断，
+        // 查「成功」二字会漏掉被读坏的情况。
+        if ((t.contains("成") || t.contains("功")) &&
+            listOf("支付", "付款", "交易", "扣款", "转账", "退款").any { t.contains(it) }
+        ) return true
 
         // 金额必须**独占一行**。
         //
@@ -920,15 +930,22 @@ class PaymentAccessibilityService : AccessibilityService() {
         // 所以这一条能挡住「有支付字样、但整屏是乱码」的情况。
         if (!AMOUNT_ON_OWN_LINE.containsMatchIn(ocrText)) return false
 
+        // ★ 收入必须**同时**出现「收款」和「存入」。
+        //
+        // 依据用户实测反馈：微信收款成功页的原话是
+        //     「你已收款，资金已存入零钱」
+        // 而**聊天记录里的转账气泡只写「已收款」**——
+        // 光凭这一个词分不清「真的收到钱」和「翻到几天前的聊天记录」。
+        // 实测把好几天前的聊天记录当成了现在的收款。
+        if (t.contains("收款") && t.contains("存入")) return true
+
         val strongMarkers = listOf(
-            // 支付成功页
-            "支付成功", "付款成功", "交易成功",
-            // 支付凭证页（你图一里那种卡片，但**单张**时才是结果页）
+            // 支付凭证页（单张时才是结果页）
             "收款方", "交易状态", "对方已收款",
-            // 收款成功页（你图三）
-            "你已收款", "资金已存入零钱", "收款时间", "转账时间",
+            // 收款成功页的其余特征（「收款」+「存入」已在上面判过）
+            "收款时间", "转账时间",
             // 通用
-            "支付凭证", "已存入零钱",
+            "支付凭证",
         )
         return strongMarkers.any { t.contains(it) }
     }
@@ -1015,7 +1032,7 @@ class PaymentAccessibilityService : AccessibilityService() {
         return ok
     }
 
-    private fun looksLikePaymentResult(text: String): Boolean {
+    private fun looksLikePaymentResult(text: String, sourceKey: String = ""): Boolean {
         val compact = text.replace(Regex("\\s+"), "")
 
         // ① 失败页直接排除
@@ -1023,6 +1040,21 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         // ② 成功标记优先 —— 支付成功页也可能带单号、带「红包」字样（优惠抵扣），
         //    所以成功标记必须在所有排除规则之前判定，否则会被误杀。
+        // ---- 成功判定：微信从严，其他平台照旧 ----
+        //
+        // 微信主页的聊天列表里有个叫「微信支付」的会话，写着「已支付¥0.99」——
+        // 只认「已支付」会把它当成一笔真交易。所以微信要求留下
+        // 「成」或「功」的痕迹（真实支付页必然有，哪怕 OCR 把「成功」读成「成咸功」）。
+        //
+        // 这道收紧**只对微信**：支付宝、银行的结果页文案各不相同，
+        // 对它们套同样的要求会大面积漏记。
+        if (sourceKey == SourceKey.WECHAT) {
+            if ((compact.contains("成") || compact.contains("功")) &&
+                listOf("支付", "付款", "交易", "扣款", "转账", "退款").any { compact.contains(it) }
+            ) return true
+            // 微信没留下成功痕迹 → 多半是聊天记录/列表页，不做支付页处理
+            return false
+        }
         if (looksLikeSuccessLoosely(compact)) return true
 
         // ③ ★ 浏览页 / 电商首页排除。

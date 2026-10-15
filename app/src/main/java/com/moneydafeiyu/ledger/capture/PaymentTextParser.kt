@@ -95,7 +95,10 @@ object PaymentTextParser {
         Regex("领取[^，。|]{0,8}红包"),                   // 领取红包
         Regex("红包[^，。|]{0,8}(?:到账|存入|入账|已领|已收)"),
         Regex("(?:转账|红包)[^，。|]{0,8}(?:已到账|已存入|已入账)"),
+        // 「已收款」保留 —— 银行、支付宝的到账通知就是这么写的，动它会误伤。
+        // 微信那边的聊天记录问题，在 detectDirection 里按来源单独处理。
         Regex("已收款"),
+        Regex("收款[^，。|]{0,12}存入"),
         Regex("收款成功"),
         Regex("已收下"),                                  // 微信「已收下你的转账」
     )
@@ -441,7 +444,19 @@ object PaymentTextParser {
         // ---- 第一优先：转账/红包这类"词本身不带方向"的场景 ----
         // 顺序不能反：收入短语先查，否则「张三向我转账」会被
         // 支出短语 "向…转账" 抢走，记成一笔假支出。
-        if (INCOMING_PATTERNS.any { it.containsMatchIn(text) }) return Direction.INCOME
+        if (INCOMING_PATTERNS.any { it.containsMatchIn(text) }) {
+            // ★ 微信来源要额外过一道：**聊天记录里的转账气泡也写着「已收款」**，
+            //   单独这一个词会把几天前的旧聊天当成现在的收款。
+            //
+            //   真正的微信收款成功页原话是「你已收款，资金**已存入**零钱」——
+            //   所以微信要求「收款」和「存入」同时出现。
+            //
+            //   这道检查**只对微信**：银行、支付宝的到账通知就是简短的「已收款」，
+            //   对它们加同样的要求会误伤一大片。
+            val incomeOk = sourceKey != SourceKey.WECHAT ||
+                (text.contains("收款") && text.contains("存入"))
+            if (incomeOk) return Direction.INCOME
+        }
         if (OUTGOING_PATTERNS.any { it.containsMatchIn(text) }) return Direction.EXPENSE
 
         // ---- 判单词前必须洗掉品牌名 ----
@@ -486,9 +501,21 @@ object PaymentTextParser {
         // 二字把「支付宝到账」误判成支出），于是整句既无收入词也无支出词，
         // 方向判不出 → 整笔丢掉。用户看到的就是"读屏明明命中了却不入账"。
         //
-        // 兜底成支出是安全的：**微信的收款页在第①步就被收入短语拦走了**
-        // （你已收款 / 资金已存入零钱 / 向你转账…），走到这一步的只可能是付款。
-        if (sourceKey == SourceKey.WECHAT) return Direction.EXPENSE
+        // ★ 微信来源必须留下「成功」的痕迹。
+        //
+        // 依据用户实测反馈：**微信主页的聊天列表里就有一个叫「微信支付」的会话**，
+        // 「微信支付」这四个字本身完全不足以证明这是一笔付款 ——
+        // 实测把主页的聊天列表当成了支付页。
+        //
+        // 所以要求同时出现「成」或「功」：
+        //   · 真实支付页   「支付成功」「支付成咸功」← OCR 把成认成咸，但「功」还在
+        //   · 聊天列表     「微信支付 | 已支付¥0.99」← 一个都没有
+        //
+        // 刻意用「成」「功」**分开**判断而不是「成功」二字：
+        // 前面遇到过 OCR 把「成功」读成「成咸功」，查「成功」会漏。
+        if (sourceKey == SourceKey.WECHAT) {
+            return if (text.contains("成") || text.contains("功")) Direction.EXPENSE else null
+        }
 
         return null
     }
