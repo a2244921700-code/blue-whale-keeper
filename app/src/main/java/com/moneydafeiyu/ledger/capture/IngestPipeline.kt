@@ -181,6 +181,17 @@ object IngestPipeline {
         }
 
         val existing = candidates.firstOrNull { c ->
+            // ★ 来源不同 → 视为同一笔。
+            //
+            // 一笔交易会在多个地方留下痕迹：淘宝页面显示「支付方式：银行卡」、
+            // 支付宝发扣款通知、银行发到账短信。它们的商户名往往不一样
+            // （一边是「淘宝」，一边是真实店铺名），按下面的商户名规则会判成两笔。
+            //
+            // 所以先按来源分：**不同来源的同额同向记录，就是同一笔的不同侧面。**
+            if (c.sourceKey != sourceKey) return@firstOrNull true
+
+            // 同一来源内，才用商户名区分 —— 这里保留原来的理由：
+            // 「A 店花 20」不该把「B 店花 20」吞掉，每天吃同一家同样金额是常态。
             val a = c.merchant.trim()
             val b = parsed.merchant.trim()
             !(a.isNotEmpty() && b.isNotEmpty() && a != b)

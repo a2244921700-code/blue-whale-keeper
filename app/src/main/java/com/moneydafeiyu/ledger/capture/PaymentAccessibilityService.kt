@@ -561,6 +561,20 @@ class PaymentAccessibilityService : AccessibilityService() {
             return
         }
 
+        // ---- 电商 App 不做读屏判定 ----
+        //
+        // 淘宝、京东、拼多多自己**没有支付能力**：付款一定是跳转到
+        // 支付宝 / 微信 / 银行完成的，那些渠道各自会发通知。
+        //
+        // 读它们的页面只会读到中间态 —— 实测用户买完东西，
+        // 淘宝页面显示「支付方式：银行卡」被记了一笔，
+        // 支付宝的扣款通知又记了一笔，同一笔账重复两次。
+        //
+        // 它们的**通知**仍然照常处理（那是补充商户名的重要来源）。
+        if (sourceKey == SourceKey.TAOBAO || sourceKey == SourceKey.JD || sourceKey == SourceKey.PDD) {
+            return
+        }
+
         val hit = text.length >= 6 && (looksLikeMoneyPage(text) || looksLikePaymentResult(text, sourceKey))
 
         if (hit) {

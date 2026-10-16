@@ -33,8 +33,8 @@ android {
         applicationId = "com.moneydafeiyu.ledger"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10126
-        versionName = "1.1.26"
+        versionCode = 10127
+        versionName = "1.1.27"
         resourceConfigurations += listOf("zh", "en")
         // 硬性要求：只保�?arm64，配�?R8 才能把包控制�?~14MB
         ndk { abiFilters += "arm64-v8a" }
