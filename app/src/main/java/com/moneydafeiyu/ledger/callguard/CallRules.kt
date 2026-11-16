@@ -52,6 +52,9 @@ object CallRules {
         if (digits.isEmpty()) return false
         if (isMobile(digits)) return false
         if (isServiceNumber(digits)) return false
+        // 网约车/快递的隐私转接号（700 段）长得很像本地座机，
+        // 但它们是**正常业务来电**，必须放行 —— 否则司机永远打不进来。
+        if (isRideHailing(digits)) return false
         if (digits.startsWith("0")) return true
         if (digits.length in 7..9) return true
         return false
@@ -71,6 +74,36 @@ object CallRules {
 
     fun isVirtual(digits: String): Boolean =
         VIRTUAL_PREFIX.any { digits.startsWith(it) }
+
+    /**
+     * 网约车 / 快递平台的**隐私转接号**：700 号段。
+     *
+     * ## 为什么必须单独放行
+     *
+     * 平台为了保护双方隐私，不会把司机的真实号码给你，而是分配一个中间号
+     * （700xxxxxxx），通话时由平台转接。这类号码的特征是：
+     *
+     *   - 不以 1 开头 → 不算手机号
+     *   - 不带区号 → 不算"按区号判断的座机"
+     *   - 长度 7~9 位 → **正好落进「本地座机」的判定区间**
+     *
+     * 所以不加这条排除，司机的电话会被当成座机**直接静默挂断** ——
+     * 而挂断是完全无感的（不响、不弹、不留痕），用户只会觉得"司机怎么不打给我"。
+     *
+     * ## 为什么不是"关掉座机拦截"
+     *
+     * 座机拦截是主力规则，骚扰电话绝大多数来自座机。
+     * 只放行 700 这一个前缀，既能接得通司机，又不动摇主体防护。
+     *
+     * ## 700 是唯一要放行的吗
+     *
+     * 目前网约车平台公开的隐私号段以 700 为主；如果后续出现新的号段，
+     * 往 [RIDE_HAILING_PREFIX] 里加一条即可，判定逻辑不用动。
+     */
+    private val RIDE_HAILING_PREFIX = listOf("700")
+
+    fun isRideHailing(digits: String): Boolean =
+        RIDE_HAILING_PREFIX.any { digits.startsWith(it) }
 
     /**
      * 主判定入口。
